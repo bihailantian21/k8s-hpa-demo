@@ -20,17 +20,54 @@ Metrics API 的 api 路径是 /apis/metrics.k8s.io/。
 
 这里先简单介绍与熟悉 HPA，运行 HPA Demo。
 
+部署 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)。在部署 metrics-server 之前，
+请确认 Kubernetes 集群配置开启了 Aggregation Layer(聚合层)。参考[前提](https://github.com/kubernetes-sigs/metrics-server#requirements)。
+
+kubernetes/deployment 目录下的 yaml 文件介绍：
+
+```
+aggregated-metrics-reader.yaml
+auth-delegator.yaml
+auth-reader.yaml
+metrics-apiservice.yaml
+metrics-server-deployment.yaml  
+替换 k8s.gcr.io/metrics-server-amd64:v0.3.6 为 mirrorgooglecontainers/metrics-server-amd64:v0.3.6 注意 imagePullPolicy: IfNotPresent
+args 参数添加 
+- --kubelet-insecure-tls
+- --kubelet-preferred-address-types=InternalIP
+metrics-server-service.yaml
+resource-reader.yaml
+```
+
+
+
 ## 示例一
 
 参照[官网 HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/) 简单实现基于内存或者 CPU 的 HPA 案例。
 
 这里简单的说下步骤，后面重点学习下基于 metric API 自定义指标的 HPA。
 
-1. 打包镜像，运行 php 服务。
-docker build -t 
-或者直接运行命令 `kubectl apply -f https://k8s.io/examples/application/php-apache.yaml`。
+第一：打包镜像，运行 php-server 的 Deployment 与 Service
+```
+docker build -t  tanjunchen/hpa-example:test .
+```
+或者直接运行命令 `kubectl apply -f https://k8s.io/examples/application/php-apache.yaml`
 
+第二：创建 HPA
 
+`kubectl autoscale deployment php-apache --cpu-percent=50 --min=1 --max=5`
+
+第三：查看 hpa 与 svc
+
+`kubectl get hpa` 
+`kubectl get svc -o wide`
+
+第四：压力测试
+
+```
+kubectl run --generator=run-pod/v1 -i --tty load-generator --image=busybox /bin/sh
+while true; do wget -q -O- http://php-apache.default.svc.cluster.local; done
+```
 
 # 总结
 
@@ -38,3 +75,4 @@ docker build -t
 
 [官网 HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/)
 [autoscaler](https://github.com/kubernetes/autoscaler)
+[metrics-server](https://github.com/kubernetes-sigs/metrics-server)

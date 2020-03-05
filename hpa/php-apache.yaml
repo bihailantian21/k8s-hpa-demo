@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: php-apache
-          image: tanjunchen/hpa-example
+          image: tanjunchen/hpa-example:test
           ports:
             - containerPort: 80
           resources:

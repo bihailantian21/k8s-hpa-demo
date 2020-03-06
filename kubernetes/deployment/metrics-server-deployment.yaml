@@ -33,7 +33,7 @@ spec:
         image: mirrorgooglecontainers/metrics-server-amd64:v0.3.6
         args:
           - --cert-dir=/tmp
-          - --secure-port=4443
+          - --secure-port=443
           - --kubelet-insecure-tls
           - --kubelet-preferred-address-types=InternalIP
         ports:
@@ -51,3 +51,4 @@ spec:
       nodeSelector:
         beta.kubernetes.io/os: linux
         kubernetes.io/arch: "amd64"
+        metrics: "yes"

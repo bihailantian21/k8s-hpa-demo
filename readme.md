@@ -48,12 +48,47 @@ metrics-server-service.yaml
 resource-reader.yaml
 ```
 
-设置 master 节点可以调度 Pod
-kubectl taint node k8s-master node-role.kubernetes.io/master-
+以上 yaml 文件的作用，自行查找。
 
-添加了 label metrics: "yes"
-kubectl label nodes  k8s-master  metrics=yes
+部署完 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)后，执行 `kubectl api-versions` 操作，显示如下：
 
+```
+admissionregistration.k8s.io/v1
+admissionregistration.k8s.io/v1beta1
+apiextensions.k8s.io/v1
+apiextensions.k8s.io/v1beta1
+apiregistration.k8s.io/v1
+apiregistration.k8s.io/v1beta1
+apps/v1
+authentication.k8s.io/v1
+authentication.k8s.io/v1beta1
+authorization.k8s.io/v1
+authorization.k8s.io/v1beta1
+autoscaling/v1
+autoscaling/v2beta1
+autoscaling/v2beta2
+batch/v1
+batch/v1beta1
+certificates.k8s.io/v1beta1
+coordination.k8s.io/v1
+coordination.k8s.io/v1beta1
+crd.projectcalico.org/v1
+discovery.k8s.io/v1beta1
+events.k8s.io/v1beta1
+extensions/v1beta1
+metrics.k8s.io/v1beta1   # 新增的
+networking.k8s.io/v1
+networking.k8s.io/v1beta1
+node.k8s.io/v1beta1
+policy/v1beta1
+rbac.authorization.k8s.io/v1
+rbac.authorization.k8s.io/v1beta1
+scheduling.k8s.io/v1
+scheduling.k8s.io/v1beta1
+storage.k8s.io/v1
+storage.k8s.io/v1beta1
+v1
+```
 
 ## 示例一
 
@@ -62,9 +97,14 @@ kubectl label nodes  k8s-master  metrics=yes
 这里简单的说下步骤，后面重点学习下基于 metric API 自定义指标的 HPA。
 
 第一：打包镜像，运行 php-server 的 Deployment 与 Service
+
 ```
 docker build -t  tanjunchen/hpa-example:test .
+然后将镜像分发到各个 Node 节点上
+kubectl apply -f php-apache.yaml
 ```
+以上主要是使用自定义的镜像，使用官方镜像请科学上网。
+
 或者直接运行命令 `kubectl apply -f https://k8s.io/examples/application/php-apache.yaml`
 
 第二：创建 HPA
@@ -81,6 +121,29 @@ docker build -t  tanjunchen/hpa-example:test .
 ```
 kubectl run --generator=run-pod/v1 -i --tty load-generator --image=busybox /bin/sh
 while true; do wget -q -O- http://php-apache.default.svc.cluster.local; done
+```
+
+`kubectl describe deploy Deployment/php-apache`
+
+```
+Events:
+  Type    Reason             Age    From                   Message
+  ----    ------             ----   ----                   -------
+  Normal  ScalingReplicaSet  9m7s   deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 1
+  Normal  ScalingReplicaSet  6m4s   deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 4
+  Normal  ScalingReplicaSet  5m49s  deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 5
+```
+
+kill 掉相应的 pod，几分钟后
+
+```
+Events:
+  Type    Reason             Age    From                   Message
+  ----    ------             ----   ----                   -------
+  Normal  ScalingReplicaSet  12m    deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 1
+  Normal  ScalingReplicaSet  8m57s  deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 4
+  Normal  ScalingReplicaSet  8m42s  deployment-controller  Scaled up replica set php-apache-6c5bfb4d65 to 5
+  Normal  ScalingReplicaSet  66s    deployment-controller  Scaled down replica set php-apache-6c5bfb4d65 to 1
 ```
 
 # 示例二
@@ -115,22 +178,42 @@ E0306 02:41:43.384810       1 manager.go:111] unable to fully collect metrics: [
 - --kubelet-preferred-address-types=InternalIP
 ```
 经过以上修改，metrics-server 就会改为以 IP 形式来请求 metrics 数据，kubelet-insecure-tls 参数是因为改为 IP 后，
-原来基于主机名的证书就不能用了（会提示x.509证书错误），只能使用非安全连接。
+原来基于主机名的证书就不能用了（会提示x.509证书错误），只能使用非安全连接。当然这里只是针对测试或者本地环境，生产环境慎用。
 
-还有就是使用 dnsmasq 构建一个上游的 dns 服务
+另一种解决方案是使用 dnsmasq 构建一个上游的 dns 服务。
 
-kubectl logs -n kube-system kube-apiserver-k8s-master
+`kubeadm init --image-repository registry.aliyuncs.com/google_containers --kubernetes-version v1.17.0  --pod-network-cidr=10.244.0.0/16`
+
+kubectl top nodes 可能会出现以下问题：
+
+![show-unknown](pic/top-node-show.jpg)
+
+这种问题一般是由于网络导致的。可能是由于 `--pod-network-cidr` 参数指定的值跟物理网络段冲突，导致网络之间不通。可以参阅 [pod-network-cidr 有什么作用？](https://blog.csdn.net/shida_csdn/article/details/104334372)
+
+我部署的网络插件是 [calico](kubernetes/network/calico.yaml)，注意我修改了 `CALICO_IPV4POOL_CIDR` 的值为 `172.20.0.0/16`。
+
+`kubeadm init --image-repository registry.aliyuncs.com/google_containers --kubernetes-version v1.17.0  --pod-network-cidr=172.20.0.0/16  --service-cidr=10.32.0.0/24`
+
+kubectl top nodes
 
 ```
-I0306 02:30:23.493919       1 log.go:172] http: TLS handshake error from 192.168.17.132:56160: remote error: tls: bad certificate
+NAME         CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   
+k8s-master   141m         7%     2024Mi          53%       
+k8s-node01   71m          7%     1776Mi          46%       
+k8s-node02   180m         18%    1910Mi          50% 
 ```
 
-```
-E0306 02:37:20.916909       1 controller.go:114] loading OpenAPI spec for "v1beta1.metrics.k8s.io" failed with: failed to retrieve openAPI spec, http error: ResponseCode: 503, Body: service unavailable
-, Header: map[Content-Type:[text/plain; charset=utf-8] X-Content-Type-Options:[nosniff]]
-```
+常见排错手段：
 
+telnet IP 10250
 
+route -n
+
+ip a
+
+kubectl logs -n kube-system  calico-node-*
+
+kubectl logs -n kube-system  metrics-server-**-*
 
 
 

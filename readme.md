@@ -16,9 +16,20 @@ Metrics server 是 Kubernetes 集群资源使用情况的聚合器，Kubernetes 
 
 Metrics API 的 api 路径是 /apis/metrics.k8s.io/。
 
+Kubernets 将资源指标分为两种：
+
+    core metrics 核心指标： 采集每个节点上的 kubelet 公开的 summary api 上的指标信息，通常只包含 cpu、内存使用率信息
+    custom metrics 自定义指标：允许用户从外部监控系统中采集自定义指标，如应用的 qps 等
+
 # 示例
 
 这里先简单介绍与熟悉 HPA，运行 HPA Demo。
+
+Metrics Server
+
+核心指标通过 metrics api 获取，而 Metrics Server 实现了 Resurce Metrics API。
+Metrics Server 是集群范围资源使用数据的聚合器。由 Metrics Server 从每个节点上的 Kubelet 公开的 Summary API 中采集指标信息。
+也就是说，如果需要使用 Kubernetes 的 HPA 功能，需要先安装 Metrics Server。
 
 部署 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)。在部署 metrics-server 之前，
 请确认 Kubernetes 集群配置开启了 Aggregation Layer(聚合层)。参考[前提条件](https://github.com/kubernetes-sigs/metrics-server#requirements)。
@@ -90,6 +101,123 @@ storage.k8s.io/v1beta1
 v1
 ```
 
+`kubectl get --raw "/apis/metrics.k8s.io/v1beta1" | jq .`
+
+```
+{
+  "kind": "APIResourceList",
+  "apiVersion": "v1",
+  "groupVersion": "metrics.k8s.io/v1beta1",
+  "resources": [
+    {
+      "name": "nodes",
+      "singularName": "",
+      "namespaced": false,
+      "kind": "NodeMetrics",
+      "verbs": [
+        "get",
+        "list"
+      ]
+    },
+    {
+      "name": "pods",
+      "singularName": "",
+      "namespaced": true,
+      "kind": "PodMetrics",
+      "verbs": [
+        "get",
+        "list"
+      ]
+    }
+  ]
+}
+```
+
+`kubectl get --raw "/apis/metrics.k8s.io/v1beta1/nodes" | jq .`
+
+```
+{
+  "kind": "NodeMetricsList",
+  "apiVersion": "metrics.k8s.io/v1beta1",
+  "metadata": {
+    "selfLink": "/apis/metrics.k8s.io/v1beta1/nodes"
+  },
+  "items": [
+    {
+      "metadata": {
+        "name": "k8s-master",
+        "selfLink": "/apis/metrics.k8s.io/v1beta1/nodes/k8s-master",
+        "creationTimestamp": "2020-03-10T08:27:21Z"
+      },
+      "timestamp": "2020-03-10T08:26:24Z",
+      "window": "30s",
+      "usage": {
+        "cpu": "139064539n",
+        "memory": "1874488Ki"
+      }
+    },
+    {
+      "metadata": {
+        "name": "k8s-node01",
+        "selfLink": "/apis/metrics.k8s.io/v1beta1/nodes/k8s-node01",
+        "creationTimestamp": "2020-03-10T08:27:21Z"
+      },
+      "timestamp": "2020-03-10T08:26:20Z",
+      "window": "30s",
+      "usage": {
+        "cpu": "61327208n",
+        "memory": "1395212Ki"
+      }
+    },
+    {
+      "metadata": {
+        "name": "k8s-node02",
+        "selfLink": "/apis/metrics.k8s.io/v1beta1/nodes/k8s-node02",
+        "creationTimestamp": "2020-03-10T08:27:21Z"
+      },
+      "timestamp": "2020-03-10T08:26:22Z",
+      "window": "30s",
+      "usage": {
+        "cpu": "76371977n",
+        "memory": "1745540Ki"
+      }
+    }
+  ]
+}
+```
+
+`kubectl get --raw "/apis/metrics.k8s.io/v1beta1/nodes" | jq .`
+
+```
+{
+  "kind": "PodMetricsList",
+  "apiVersion": "metrics.k8s.io/v1beta1",
+  "metadata": {
+    "selfLink": "/apis/metrics.k8s.io/v1beta1/pods"
+  },
+  "items": [
+    {
+      "metadata": {
+        "name": "kube-apiserver-k8s-master",
+        "namespace": "kube-system",
+        "selfLink": "/apis/metrics.k8s.io/v1beta1/namespaces/kube-system/pods/kube-apiserver-k8s-master",
+        "creationTimestamp": "2020-03-10T08:29:40Z"
+      },
+      "timestamp": "2020-03-10T08:29:16Z",
+      "window": "30s",
+      "containers": [
+        {
+          "name": "kube-apiserver",
+          "usage": {
+            "cpu": "31323876n",
+            "memory": "280200Ki"
+          }
+        }
+      ]
+    },
+......
+```
+
 ## 示例一
 
 参照[官网 HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/) 简单实现基于内存或者 CPU 的 HPA 案例。
@@ -148,6 +276,128 @@ Events:
 
 # 示例二
 
+参考[开源项目 k8s-prom-hpa ](https://github.com/stefanprodan/k8s-prom-hpa)。
+
+注意：开源项目中的 podinfo 目录下的 yaml 存在问题。在 k8s 1.17 下会实验失败。
+
+`git clone https://github.com/stefanprodan/k8s-prom-hpa`
+
+kubectl create -f ./podinfo/podinfo-svc.yaml,./podinfo/podinfo-dep.yaml
+
+通过 http://<K8S_PUBLIC_IP>:31198  上的 NodePort 服务访问 podinfo
+
+    大致输出以下文本，主要是一些环境变量。
+    runtime:
+      arch: amd64
+      external_ip: ""
+      max_procs: "1"
+      num_cpu: "1"
+      num_goroutine: "8"
+      os: linux
+      version: go1.9.2
+    labels:
+      app: podinfo
+      pod-template-hash: 745db9dccc
+    annotations:
+      cni.projectcalico.org/podIP: 172.20.85.197/32
+      cni.projectcalico.org/podIPs: 172.20.85.197/32
+      kubernetes.io/config.seen: 2020-03-10T02:04:08.942904268-07:00
+      kubernetes.io/config.source: api
+      prometheus.io/scrape: "true"
+    environment:
+      HOME: /root
+      HOSTNAME: podinfo-745db9dccc-78sxz
+      KUBERNETES_PORT: tcp://10.96.0.1:443
+      KUBERNETES_PORT_443_TCP: tcp://10.96.0.1:443
+      KUBERNETES_PORT_443_TCP_ADDR: 10.96.0.1
+      KUBERNETES_PORT_443_TCP_PORT: "443"
+      KUBERNETES_PORT_443_TCP_PROTO: tcp
+      KUBERNETES_SERVICE_HOST: 10.96.0.1
+      KUBERNETES_SERVICE_PORT: "443"
+      KUBERNETES_SERVICE_PORT_HTTPS: "443"
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PODINFO_PORT: tcp://10.96.210.131:9898
+      PODINFO_PORT_9898_TCP: tcp://10.96.210.131:9898
+      PODINFO_PORT_9898_TCP_ADDR: 10.96.210.131
+      PODINFO_PORT_9898_TCP_PORT: "9898"
+      PODINFO_PORT_9898_TCP_PROTO: tcp
+      PODINFO_SERVICE_HOST: 10.96.210.131
+      PODINFO_SERVICE_PORT: "9898"
+
+kubectl create -f ./podinfo/podinfo-hpa.yaml
+
+    kubectl get hpa
+    NAME      REFERENCE            TARGETS                       MINPODS   MAXPODS   REPLICAS   AGE
+    podinfo   Deployment/podinfo   3977625600m/200Mi, 100%/80%   2         10        4         15m
+
+hey -n 10000 -c 2 -q 10  http://<K8S_PUBLIC_IP>:31198 
+
+    kubectl get hpa
+    NAME      REFERENCE            TARGETS                       MINPODS   MAXPODS   REPLICAS   AGE
+    podinfo   Deployment/podinfo   2874481777m/200Mi, 100%/80%   2         10        10         10m
+    
+    kubectl describe hpa
+    Events:
+      Type    Reason             Age    From                       Message
+      ----    ------             ----   ----                       -------
+      Normal  SuccessfulRescale  12m    horizontal-pod-autoscaler  New size: 3; reason: cpu resource utilization (percentage of request) above target
+      Normal  SuccessfulRescale  10m    horizontal-pod-autoscaler  New size: 4; reason: cpu resource utilization (percentage of request) above target
+      Normal  SuccessfulRescale  8m54s  horizontal-pod-autoscaler  New size: 5; reason: cpu resource utilization (percentage of request) above target
+      Normal  SuccessfulRescale  6m53s  horizontal-pod-autoscaler  New size: 7; reason: cpu resource utilization (percentage of request) above target
+      Normal  SuccessfulRescale  4m51s  horizontal-pod-autoscaler  New size: 9; reason: cpu resource utilization (percentage of request) above target
+      Normal  SuccessfulRescale  2m50s  horizontal-pod-autoscaler  New size: 10; reason: cpu resource utilization (percentage of request) above target
+    
+kill hey -n 10000 -c 2 -q 10  http://<K8S_PUBLIC_IP>:31198 
+    
+    Summary:
+      Total:	29.4270 secs
+      Slowest:	1.0054 secs
+      Fastest:	0.5165 secs
+      Average:	0.6419 secs
+      Requests/sec:	3.0924
+      
+      Total data:	104947 bytes
+      Size/request:	1153 bytes
+    
+    Response time histogram:
+      0.516 [1]	|■
+      0.565 [18]	|■■■■■■■■■■■■■■
+      0.614 [50]	|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+      0.663 [5]	|■■■■
+      0.712 [3]	|■■
+      0.761 [1]	|■
+      0.810 [0]	|
+      0.859 [0]	|
+      0.908 [0]	|
+      0.957 [0]	|
+      1.005 [13]	|■■■■■■■■■■
+    
+    
+    Latency distribution:
+      10% in 0.5598 secs
+      25% in 0.5674 secs
+      50% in 0.5789 secs
+      75% in 0.6302 secs
+      90% in 1.0014 secs
+      95% in 1.0017 secs
+      0% in 0.0000 secs
+    
+    Details (average, fastest, slowest):
+      DNS+dialup:	0.0001 secs, 0.5165 secs, 1.0054 secs
+      DNS-lookup:	0.0000 secs, 0.0000 secs, 0.0000 secs
+      req write:	0.0000 secs, 0.0000 secs, 0.0008 secs
+      resp wait:	0.6417 secs, 0.5164 secs, 1.0053 secs
+      resp read:	0.0001 secs, 0.0000 secs, 0.0002 secs
+    
+    Status code distribution:
+      [200]	91 responses
+
+    kubectl get hpa
+    等一段时间恢复原状
+
+kubectl delete -f ./podinfo/podinfo-hpa.yaml,./podinfo/podinfo-dep.yaml,./podinfo/podinfo-svc.yaml
+
+
 基于自定义监控指标的弹性伸缩
 
 实际生产环境中，通过 CPU 和内存的监控指标弹性伸缩不能很好的反映应用真实的状态，
@@ -161,7 +411,7 @@ Kubernetes HPA 本身也支持自定义监控指标。
     Prometheus-adapter 定期从 prometheus 收集指标对抓取的监控指标进行过滤和筛选，通过 custom-metrics-apiserver 将指标对外暴露
     HPA 控制器从 custom-metrics-apiserver 获取数据
 
-参考 https://github.com/stefanprodan/k8s-prom-hpa
+
 
 # 问题与总结
 
@@ -215,6 +465,24 @@ kubectl logs -n kube-system  calico-node-*
 
 kubectl logs -n kube-system  metrics-server-**-*
 
+# 工具
+
+[jq 命令行 JSON 处理工具](https://github.com/stedolan/jq)
+
+    wget -O jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
+    chmod +x ./jq
+    cp jq /usr/bin
+
+[hey HTTP 压测工具,ApacheBench(ab) 替代者)](https://github.com/rakyll/hey)
+
+# 实验环境
+
+`kubectl version`
+
+```
+Client Version: version.Info{Major:"1", Minor:"17", GitVersion:"v1.17.0", GitCommit:"70132b0f130acc0bed193d9ba59dd186f0e634cf", GitTreeState:"clean", BuildDate:"2019-12-07T21:20:10Z", GoVersion:"go1.13.4", Compiler:"gc", Platform:"linux/amd64"}
+Server Version: version.Info{Major:"1", Minor:"17", GitVersion:"v1.17.0", GitCommit:"70132b0f130acc0bed193d9ba59dd186f0e634cf", GitTreeState:"clean", BuildDate:"2019-12-07T21:12:17Z", GoVersion:"go1.13.4", Compiler:"gc", Platform:"linux/amd64"}
+```
 
 
 # 参考

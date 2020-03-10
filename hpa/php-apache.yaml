@@ -14,6 +14,7 @@ spec:
     spec:
       containers:
         - name: php-apache
+          # 注意我使用的是本地打包好的镜像
           image: tanjunchen/hpa-example:test
           ports:
             - containerPort: 80

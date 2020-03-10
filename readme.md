@@ -21,9 +21,38 @@ Kubernets 将资源指标分为两种：
     core metrics 核心指标： 采集每个节点上的 kubelet 公开的 summary api 上的指标信息，通常只包含 cpu、内存使用率信息
     custom metrics 自定义指标：允许用户从外部监控系统中采集自定义指标，如应用的 qps 等
 
-# 示例
+在 HPA 中，默认的扩容冷却周期是 3 分钟，缩容冷却周期是 5 分钟。
+可以通过调整 kube-controller-manager 组件启动参数设置冷却时间：
 
-这里先简单介绍与熟悉 HPA，运行 HPA Demo。
+     --horizontal-pod-autoscaler-downscale-delay ：扩容冷却时间参数
+     --horizontal-pod-autoscaler-upscale-delay ：缩容冷却时间参数
+
+目前 HPA 已经支持了 autoscaling/v1、autoscaling/v2beta1 和 autoscaling/v2beta2 三个大版本。
+
+1. autoscaling/v1
+    
+    只支持 CPU 一个指标的弹性伸缩。
+    ```
+    apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: php-apache
+      namespace: default
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: php-apache
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+   ```
+1. autoscaling/v2beta1
+
+    除 cadvisor 暴露的指标外，还支持自定义指标(比如 resource、pods.object、external)，比如像第三方提供的 QPS，或者基于其他的一些资源(如消息队列)进行扩缩容。
+    
+1. autoscaling/v2beta2
+    又额外增加了外部指标支持。
 
 Metrics Server
 
@@ -32,7 +61,18 @@ Metrics Server 是集群范围资源使用数据的聚合器。由 Metrics Serve
 也就是说，如果需要使用 Kubernetes 的 HPA 功能，需要先安装 Metrics Server。
 
 部署 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)。在部署 metrics-server 之前，
-请确认 Kubernetes 集群配置开启了 Aggregation Layer(聚合层)。参考[前提条件](https://github.com/kubernetes-sigs/metrics-server#requirements)。
+请确认 Kubernetes 集群配置开启了 Aggregation Layer(聚合层)。k8s 如果是使用 kubeadm 部署的，默认的聚合层是已经启用的。参考 [前提条件](https://github.com/kubernetes-sigs/metrics-server#requirements)。
+
+/etc/kubernetes/manifests/kube-apiserver.yaml
+```
+    - --proxy-client-cert-file=/etc/kubernetes/pki/front-proxy-client.crt
+    - --proxy-client-key-file=/etc/kubernetes/pki/front-proxy-client.key
+    - --requestheader-allowed-names=front-proxy-client
+    - --requestheader-client-ca-file=/etc/kubernetes/pki/front-proxy-ca.crt
+    - --requestheader-extra-headers-prefix=X-Remote-Extra-
+    - --requestheader-group-headers=X-Remote-Group
+    - --requestheader-username-headers=X-Remote-User
+```
 
 kubernetes/deployment 目录下的 yaml 文件介绍：
 
@@ -99,6 +139,12 @@ scheduling.k8s.io/v1beta1
 storage.k8s.io/v1
 storage.k8s.io/v1beta1
 v1
+```
+
+或者执行 `kubectl get apiservices | grep metrics`
+
+```
+v1beta1.metrics.k8s.io                 kube-system/metrics-server   True        10h
 ```
 
 `kubectl get --raw "/apis/metrics.k8s.io/v1beta1" | jq .`
@@ -218,9 +264,11 @@ v1
 ......
 ```
 
+# 示例
+
 ## 示例一
 
-参照[官网 HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/) 简单实现基于内存或者 CPU 的 HPA 案例。
+参照[官网 HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/) 简单实现基于 CPU 的 HPA 案例。
 
 这里简单的说下步骤，后面重点学习下基于 metric API 自定义指标的 HPA。
 
@@ -274,11 +322,137 @@ Events:
   Normal  ScalingReplicaSet  66s    deployment-controller  Scaled down replica set php-apache-6c5bfb4d65 to 1
 ```
 
-# 示例二
+## 示例二
+
+使用 autoscaling/v1 应用 CPU 的 nginx HPA 案例。
+
+kubectl apply -f hpa/autoscaling/v1/nginx-deployment.yaml
+
+kubectl autoscale deployment nginx --min=2 --max=10 -o yaml  --dry-run > nginx-deployment-hpa.yaml
+    
+    填充以下内容：
+    apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
+    metadata:
+      creationTimestamp: null
+      name: nginx
+    spec:
+      maxReplicas: 10 # 最大扩容副本量
+      minReplicas: 2  # 最小缩容副本量
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: nginx
+      targetCPUUtilizationPercentage: 60 # 当整体的资源利用率超过 60%，会进行扩容
+    status:
+      currentReplicas: 0
+      desiredReplicas: 0
+      
+kubectl get hpa
+    
+    NAME    REFERENCE                     TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+    nginx   Deployment/nginx-deployment   0%/40%    2         10        5          104s
+
+kubectl get svc
+
+    NAME         TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+    kubernetes   ClusterIP   10.96.0.1      <none>        443/TCP   12h
+    nginx        ClusterIP   10.96.52.182   <none>        80/TCP    4m20s
+    
+ab -n 600000 -c 1000  http://10.96.52.182/index.html
+    
+    This is ApacheBench, Version 2.3 <$Revision: 1807734 $>
+    Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+    Licensed to The Apache Software Foundation, http://www.apache.org/
+    
+    Benchmarking 10.96.52.182 (be patient)
+    Completed 60000 requests
+    Completed 120000 requests
+    Completed 180000 requests
+    Completed 240000 requests
+    Completed 300000 requests
+    Completed 360000 requests
+    ^C
+    
+    Server Software:        nginx/1.17.9
+    Server Hostname:        10.96.52.182
+    Server Port:            80
+    
+    Document Path:          /index.html
+    Document Length:        612 bytes
+    
+    Concurrency Level:      1000
+    Time taken for tests:   72.603 seconds
+    Complete requests:      405634
+    Failed requests:        46
+       (Connect: 0, Receive: 0, Length: 0, Exceptions: 46)
+    Total transferred:      342786546 bytes
+    HTML transferred:       248266368 bytes
+    Requests per second:    5587.03 [#/sec] (mean)
+    Time per request:       178.986 [ms] (mean)
+    Time per request:       0.179 [ms] (mean, across all concurrent requests)
+    Transfer rate:          4610.74 [Kbytes/sec] received
+    
+    Connection Times (ms)
+                  min  mean[+/-sd] median   max
+    Connect:        0   91 341.8     16   15476
+    Processing:     0   86 128.9     42    7069
+    Waiting:        0   84 128.3     41    7067
+    Total:          0  177 391.3     82   15720
+    
+    Percentage of the requests served within a certain time (ms)
+      50%     82
+      66%    110
+      75%    157
+      80%    188
+      90%    269
+      95%   1078
+      98%   1249
+      99%   1521
+     100%  15720 (longest request)
+
+在 ab 压测的过程中，nginx 副本数很快就会达到最大值 10。
+
+kubectl describe hpa nginx
+
+    Name:                                                  nginx
+    Namespace:                                             default
+    Labels:                                                <none>
+    Annotations:                                           kubectl.kubernetes.io/last-applied-configuration:
+                                                             {"apiVersion":"autoscaling/v1","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{},"creationTimestamp":null,"name":"nginx","name...
+    CreationTimestamp:                                     Tue, 10 Mar 2020 08:50:10 -0700
+    Reference:                                             Deployment/nginx-deployment
+    Metrics:                                               ( current / target )
+      resource cpu on pods  (as a percentage of request):  0% (0) / 40%
+    Min replicas:                                          2
+    Max replicas:                                          10
+    Deployment pods:                                       2 current / 2 desired
+    Conditions:
+      Type            Status  Reason            Message
+      ----            ------  ------            -------
+      AbleToScale     True    ReadyForNewScale  recommended size matches current size
+      ScalingActive   True    ValidMetricFound  the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+      ScalingLimited  True    TooFewReplicas    the desired replica count is less than the minimum replica count
+    Events:
+      Type     Reason                        Age                    From                       Message
+      ----     ------                        ----                   ----                       -------
+      Warning  FailedGetResourceMetric       8m28s (x2 over 8m43s)  horizontal-pod-autoscaler  unable to get metrics for resource cpu: no metrics returned from resource metrics API
+      Warning  FailedComputeMetricsReplicas  8m28s (x2 over 8m43s)  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API
+      Normal   SuccessfulRescale             7m9s                   horizontal-pod-autoscaler  New size: 10; reason: cpu resource utilization (percentage of request) above target
+      Normal   SuccessfulRescale             22s                    horizontal-pod-autoscaler  New size: 2; reason: All metrics below target
+
+经过缩容默认时间后，执行 kubectl get hpa
+
+    NAME    REFERENCE                     TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+    nginx   Deployment/nginx-deployment   0%/40%    2         10        2          9m54s
+
+数据流 HPA -> apiserver -> kube aggregation -> metrics-server -> kubelet(cadvisor)
+
+## 示例二
 
 参考[开源项目 k8s-prom-hpa ](https://github.com/stefanprodan/k8s-prom-hpa)。
 
-注意：开源项目中的 podinfo 目录下的 yaml 存在问题。在 k8s 1.17 下会实验失败。
+注意：目前 k8s-prom-hpa 开源项目中的 podinfo 目录下的 yaml 存在问题。在 k8s 1.17 下会实验失败。
 
 `git clone https://github.com/stefanprodan/k8s-prom-hpa`
 
@@ -411,7 +585,7 @@ Kubernetes HPA 本身也支持自定义监控指标。
     Prometheus-adapter 定期从 prometheus 收集指标对抓取的监控指标进行过滤和筛选，通过 custom-metrics-apiserver 将指标对外暴露
     HPA 控制器从 custom-metrics-apiserver 获取数据
 
-
+## 示例三
 
 # 问题与总结
 
@@ -475,6 +649,10 @@ kubectl logs -n kube-system  metrics-server-**-*
 
 [hey HTTP 压测工具,ApacheBench(ab) 替代者)](https://github.com/rakyll/hey)
 
+apache2-utils
+
+    sudo apt install apache2-utils
+
 # 实验环境
 
 `kubectl version`
@@ -483,7 +661,6 @@ kubectl logs -n kube-system  metrics-server-**-*
 Client Version: version.Info{Major:"1", Minor:"17", GitVersion:"v1.17.0", GitCommit:"70132b0f130acc0bed193d9ba59dd186f0e634cf", GitTreeState:"clean", BuildDate:"2019-12-07T21:20:10Z", GoVersion:"go1.13.4", Compiler:"gc", Platform:"linux/amd64"}
 Server Version: version.Info{Major:"1", Minor:"17", GitVersion:"v1.17.0", GitCommit:"70132b0f130acc0bed193d9ba59dd186f0e634cf", GitTreeState:"clean", BuildDate:"2019-12-07T21:12:17Z", GoVersion:"go1.13.4", Compiler:"gc", Platform:"linux/amd64"}
 ```
-
 
 # 参考
 

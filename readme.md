@@ -587,6 +587,93 @@ Kubernetes HPA 本身也支持自定义监控指标。
 
 ## 示例三
 
+kubectl apply -f hpa/namespaces.yaml
+
+kubectl apply -f prometheus
+
+make certs
+
+kubectl apply -f ./custom-metrics-api
+
+kubectl apply -f ./podinfo/podinfo-svc.yaml,./podinfo/podinfo-dep.yaml
+
+kubectl get --raw "/apis/custom.metrics.k8s.io/v1beta1/namespaces/default/pods/*/http_requests" | jq .
+
+```
+{
+  "kind": "MetricValueList",
+  "apiVersion": "custom.metrics.k8s.io/v1beta1",
+  "metadata": {
+    "selfLink": "/apis/custom.metrics.k8s.io/v1beta1/namespaces/default/pods/%2A/http_requests"
+  },
+  "items": [
+    {
+      "describedObject": {
+        "kind": "Pod",
+        "namespace": "default",
+        "name": "podinfo-745db9dccc-cq9t8",
+        "apiVersion": "/v1"
+      },
+      "metricName": "http_requests",
+      "timestamp": "2020-03-11T05:51:58Z",
+      "value": "888m"
+    },
+    {
+      "describedObject": {
+        "kind": "Pod",
+        "namespace": "default",
+        "name": "podinfo-745db9dccc-n9sl6",
+        "apiVersion": "/v1"
+      },
+      "metricName": "http_requests",
+      "timestamp": "2020-03-11T05:51:58Z",
+      "value": "911m"
+    }
+  ]
+}
+```
+
+kubectl apply -f ./podinfo/podinfo-hpa-custom.yaml
+
+kubectl get hpa
+
+```
+NAME      REFERENCE            TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+podinfo   Deployment/podinfo   899m/10   2         10        2          155m
+```
+
+ab -n 600000 -c 1000  http://K8S-IP:31198/heathlz
+
+kubectl describe hpa
+
+```
+Name:                       podinfo
+Namespace:                  default
+Labels:                     <none>
+Annotations:                <none>
+CreationTimestamp:          Tue, 10 Mar 2020 20:21:14 -0700
+Reference:                  Deployment/podinfo
+Metrics:                    ( current / target )
+  "http_requests" on pods:  906m / 10
+Min replicas:               2
+Max replicas:               10
+Deployment pods:            10 current / 10 desired
+Conditions:
+  Type            Status  Reason               Message
+  ----            ------  ------               -------
+  AbleToScale     True    ScaleDownStabilized  recent recommendations were higher than current one, applying the highest recent recommendation
+  ScalingActive   True    ValidMetricFound     the HPA was able to successfully calculate a replica count from pods metric http_requests
+  ScalingLimited  True    TooManyReplicas      the desired replica count is more than the maximum replica count
+Events:
+  Type    Reason             Age    From                       Message
+  ----    ------             ----   ----                       -------
+  Normal  SuccessfulRescale  7m35s  horizontal-pod-autoscaler  New size: 3; reason: pods metric http_requests above target
+  Normal  SuccessfulRescale  6m35s  horizontal-pod-autoscaler  New size: 6; reason: pods metric http_requests above target
+  Normal  SuccessfulRescale  6m20s  horizontal-pod-autoscaler  New size: 10; reason: pods metric http_requests above target
+```
+
+停止压测后，过了冷却默认时间，HPA 的副本数就会恢复正常。
+
 # 问题与总结
 
 ```
